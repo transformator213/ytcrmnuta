@@ -1,0 +1,198 @@
+<!DOCTYPE html>
+<html lang="uk">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>YouTube CRM (NUTA)</title>
+<style>
+/* --- твій стиль лишив без змін --- */
+* { box-sizing: border-box; }
+body { margin: 0; font-family: system-ui, sans-serif; background: #020617; color: #e5e7eb; }
+.app { max-width: 1100px; margin: auto; padding: 16px; }
+h1 { text-align: center; margin-bottom: 14px; font-size: 1.4rem; }
+h2 { font-size: 1.1rem; margin: 10px 0 6px; }
+
+.card { background:#020617; border-radius:12px; padding:12px; border:1px solid #1f2937;
+  box-shadow:0 10px 25px rgba(15,23,42,0.8); margin-bottom:16px }
+.summary-grid { display:none; grid-template-columns:repeat(2,1fr); gap:8px; margin-top:10px }
+.summary-item,.public-summary-item{
+  background:#0b1120;border:1px solid #1f2937;border-radius:10px;padding:10px;font-size:.9rem;margin-bottom:8px
+}
+.summary-item span,.public-summary-item span{display:block;margin-top:4px;font-size:1.2rem;font-weight:600;color:#22c55e}
+
+button{cursor:pointer;border:none;border-radius:6px;padding:6px 10px;font-size:.9rem;font-weight:500;background:#22c55e;color:#020617}
+button.secondary{background:#1f2937;color:#e5e7eb}
+button.danger{background:#ef4444;color:#fff}
+button.small{padding:3px 7px;font-size:.75rem}
+
+input[type="date"],input[type="number"],input[type="text"]{width:100%;padding:6px;border-radius:6px;border:1px solid #374151;background:#020617;color:#e5e7eb}
+
+table{width:100%;border-collapse:collapse}
+th,td{padding:4px;border-bottom:1px solid #1f2937}
+
+.calendar-toggle-cell{text-align:center;cursor:pointer}
+.calendar-toggle-cell.checked{background:#16a34a;color:#fff}
+.channel-block{padding:10px;border:1px solid #1f2937;border-radius:10px;margin-bottom:8px}
+.calendar-wrapper{border:1px solid #1f2937;padding:8px;border-radius:8px;margin-top:6px}
+</style>
+</head>
+<body>
+<div class="app">
+<h1>YouTube CRM (NUTA)</h1>
+
+<!-- 🔐 Менеджер -->
+<button id="managerBtn">Менеджерський доступ</button>
+<div id="passBlock" style="display:none;margin:8px 0;">
+<input id="passInput" type="password" placeholder="Пароль" style="width:160px;">
+<button id="passOk">Увійти</button>
+</div>
+
+<!-- 🟢 ПУБЛІЧНА АНАЛІТИКА -->
+<div class="card">
+<h2>Статус системи</h2>
+<div class="public-summary-item">Готові, але не опубліковані<span id="stockPublic">0</span></div>
+<div class="public-summary-item">Заброньовано під канали<span id="reservedPublic">0</span></div>
+<label>Норма відео / день</label><input id="normInput" type="number" value="11">
+</div>
+
+<!-- 🟡 ПРИВАТНА АНАЛІТИКА -->
+<div class="card summary-grid">
+<div class="summary-item">Всього зроблено<span id="totalMade">0</span></div>
+<div class="summary-item">Всього опубліковано<span id="totalPublished">0</span></div>
+<div class="summary-item">Повні пакети по 15<span id="packs">0</span></div>
+<div class="summary-item">Ще каналів можна відкрити<span id="extraChannels">0</span></div>
+</div>
+
+<!-- 📅 ДНІ -->
+<div class="card">
+<h2>Дні (виробництво)</h2>
+<button id="addToday">+ День (сьогодні)</button>
+<button id="addDay" class="secondary">+ Порожній день</button>
+<table style="margin-top:10px;">
+<thead><tr><th>Дата</th><th>План</th><th>Зроблено</th><th></th></tr></thead>
+<tbody id="daysBody"></tbody></table>
+</div>
+
+<!-- 📺 КАНАЛИ -->
+<div class="card">
+<h2>Канали</h2>
+<button id="addChannel">+ Додати канал</button>
+<div id="channels"></div>
+</div>
+</div>
+
+<!-- 🔥 FIREBASE -->
+<script type="module">
+import { initializeApp } from "https://www.gstatic.com/firebasejs/10.7.1/firebase-app.js";
+import { getDatabase, ref, set, onValue } from "https://www.gstatic.com/firebasejs/10.7.1/firebase-database.js";
+
+const firebaseConfig = {
+  apiKey: "AIzaSyCIcE8JVuUVj2Vz0SwSSBVPeFGizeso_Os",
+  authDomain: "yt-crm-nuta.firebaseapp.com",
+  databaseURL: "https://yt-crm-nuta-default-rtdb.europe-west1.firebasedatabase.app",
+  projectId: "yt-crm-nuta",
+  storageBucket: "yt-crm-nuta.firebasestorage.app",
+  messagingSenderId: "290336884832",
+  appId: "1:290336884832:web:f253d071eeaf9ca8e09b05"
+};
+
+const app = initializeApp(firebaseConfig);
+const db = getDatabase(app);
+
+let manager=false;
+let state={norm:11,days:[],channels:[]};
+
+function sync(){ set(ref(db,"state"),state); }
+onValue(ref(db,"state"),snap=>{
+ if(snap.exists()){ state=snap.val(); renderDays(); renderChannels(); calc(); }
+});
+
+function calc(){
+let made=state.days.reduce((a,b)=>a+(b.produced||0),0);
+let published=state.channels.reduce((a,c)=>a+Object.values(c.calendar||{}).filter(v=>v).length,0);
+let stock=Math.max(0,made-published);
+let packs=Math.floor(stock/15);
+let reserved=Math.max(0,state.channels.length*15 - published);
+let extra=Math.max(0,packs-state.channels.length);
+
+document.getElementById("stockPublic").textContent=stock;
+document.getElementById("reservedPublic").textContent=reserved;
+
+if(manager){
+ document.getElementById("totalMade").textContent=made;
+ document.getElementById("totalPublished").textContent=published;
+ document.getElementById("packs").textContent=packs;
+ document.getElementById("extraChannels").textContent=extra;
+}
+}
+
+function renderDays(){
+let b=document.getElementById("daysBody"); b.innerHTML="";
+state.days.forEach((d,i)=>{
+b.innerHTML+=`
+<tr>
+<td><input type="date" value="${d.date||""}" onchange="state.days[${i}].date=this.value;sync();"></td>
+<td><input type="number" value="${d.planned||state.norm}" onchange="state.days[${i}].planned=+this.value;sync();"></td>
+<td><input type="number" value="${d.produced||0}" onchange="state.days[${i}].produced=+this.value;sync();calc();"></td>
+<td><button class="danger small" onclick="state.days.splice(${i},1);sync();renderDays();calc();">×</button></td>
+</tr>`;
+});
+}
+
+function renderChannels(){
+let c=document.getElementById("channels"); c.innerHTML="";
+state.channels.forEach((ch,i)=>{
+if(!ch.calendar)ch.calendar={};
+if(ch.month==null){let n=new Date();ch.month=n.getMonth();ch.year=n.getFullYear();}
+c.innerHTML+=`
+<div class="channel-block">
+<div class="flex-between">
+<input type="text" value="${ch.name||""}" onchange="state.channels[${i}].name=this.value;sync();">
+<button class="secondary small" onclick="state.channels[${i}].open=!state.channels[${i}].open;sync();renderChannels()">${ch.open?"Сховати":"Календар"}</button>
+<button class="danger small" onclick="state.channels.splice(${i},1);sync();renderChannels();calc();">×</button>
+</div>
+<div style="margin-top:4px;font-size:.8rem;color:#9ca3af;">Опубліковано: ${Object.values(ch.calendar).filter(v=>v).length}</div>
+<div ${ch.open?"":"style='display:none;'"} class="calendar-wrapper">${drawCal(i)}</div>
+</div>`;
+});
+}
+
+function drawCal(i){
+let ch=state.channels[i],y=ch.year,m=ch.month;
+let days=new Date(y,m+1,0).getDate(),start=(new Date(y,m,1).getDay()+6)%7;
+let out=`<div class='flex-between'>
+<button class="secondary small" onclick="nav(${i},-1)">‹</button>
+${["Січень","Лютий","Березень","Квітень","Травень","Червень","Липень","Серпень","Вересень","Жовтень","Листопад","Грудень"][m]} ${y}
+<button class="secondary small" onclick="nav(${i},1)">›</button>
+</div><table><tr>${["Пн","Вт","Ср","Чт","Пт","Сб","Нд"].map(d=>`<th>${d}</th>`).join("")}</tr>`;
+let d=1-start;
+for(let r=0;r<6;r++){
+out+="<tr>";
+for(let k=0;k<7;k++){
+if(d<1||d>days) out+="<td></td>";
+else{
+let iso=`${y}-${String(m+1).padStart(2,"0")}-${String(d).padStart(2,"0")}`;
+let ok=ch.calendar[iso];
+out+=`<td class="calendar-toggle-cell ${ok?"checked":""}" onclick="toggle(${i},'${iso}')">${ok?"✓":d}</td>`;
+}
+d++;
+}
+out+="</tr>";
+}
+return out+"</table>";
+}
+
+window.toggle=(i,d)=>{state.channels[i].calendar[d]=!state.channels[i].calendar[d];sync();renderChannels();calc();}
+window.nav=(i,s)=>{let ch=state.channels[i];ch.month+=s;if(ch.month<0){ch.month=11;ch.year--}if(ch.month>11){ch.month=0;ch.year++}sync();renderChannels()}
+window.state=state;
+
+document.getElementById("normInput").oninput=e=>{state.norm=+e.target.value;sync()}
+document.getElementById("addDay").onclick=()=>{state.days.push({date:"",planned:state.norm,produced:0});sync();renderDays()}
+document.getElementById("addToday").onclick=()=>{state.days.push({date:new Date().toISOString().slice(0,10),planned:state.norm,produced:0});sync();renderDays()}
+document.getElementById("addChannel").onclick=()=>{state.channels.unshift({name:"",open:true,calendar:{},month:null,year:null});sync();renderChannels();calc()}
+document.getElementById("managerBtn").onclick=()=>document.getElementById("passBlock").style.display="block"
+document.getElementById("passOk").onclick=()=>{if(document.getElementById("passInput").value==="265024"){manager=true;document.querySelector(".summary-grid").style.display="grid";document.getElementById("passBlock").style.display="none";calc()}else alert("Невірний пароль!")}
+
+</script>
+</body>
+</html>
